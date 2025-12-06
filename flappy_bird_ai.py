@@ -8,45 +8,64 @@ import time
 
 pygame.init()
 
+# Game Constants
 SCREEN_WIDTH = 400
 SCREEN_HEIGHT = 600
 FPS = 165
-SPEED_MULTIPLIER = 1  # Will be set via command line args at runtime
+SPEED_MULTIPLIER = 1  # Configurable via CLI args
 
 class NeuralNetwork:
     """
-    Feedforward neural network with
-    3 inputs (game state),
-    6 hidden (hidden layer),
-    1 output (flap or not flap)
+    Feedforward Neural Network.
+    Architecture: 3 Input -> 6 Hidden -> 1 Output.
+    Acts as the 'Brain' for decision making.
     """
     def __init__(self, input_size=3, hidden_size=6, output_size=1):
-        # Initialize weights and biases with random values
+        # Network dimensions
         self.input_size = input_size
         self.hidden_size = hidden_size
         self.output_size = output_size
+        
+        # Init random weights/biases (-1 to 1)
+        # w_ih: Input -> Hidden weights
+        # b_h: Hidden layer biases
+        # w_ho: Hidden -> Output weights
+        # b_o: Output layer biases
         self.w_ih = np.random.uniform(-1, 1, (hidden_size, input_size))
         self.b_h = np.random.uniform(-1, 1, (hidden_size, 1))
         self.w_ho = np.random.uniform(-1, 1, (output_size, hidden_size))
         self.b_o = np.random.uniform(-1, 1, (output_size, 1))
 
     def sigmoid(self, x):
-        # Activation function to squash output between 0 and 1
+        # Activation: Squash to 0-1 range (Probability)
         return 1 / (1 + np.exp(-np.clip(x, -500, 500)))
 
     def relu(self, x):
-        # Activation function: returns x if positive, else 0
+        # Activation: Zero out negatives (Linearity fix)
         return np.maximum(0, x)
 
     def forward(self, inputs):
-        # Calculate the output of the network given inputs
+        """
+        Forward pass.
+        Data flow: Inputs -> Hidden(ReLU) -> Output(Sigmoid).
+        Returns flap probability (0.0 - 1.0).
+        """
         inputs = np.array(inputs).reshape(-1, 1)
+        
+        # Hidden layer calc
         hidden = self.relu(np.dot(self.w_ih, inputs) + self.b_h)
+        
+        # Output layer calc
         output = self.sigmoid(np.dot(self.w_ho, hidden) + self.b_o)
+        
         return output.flatten()[0]
 
     def mutate(self, mutation_rate=0.1):
-        # Randomly adjust weights and biases to create variations
+        """
+        Evolution step: Randomly adjust weights.
+        Creates variation for next gen.
+        """
+        # Add Gaussian noise to weights if chance met
         if random.random() < mutation_rate:
             self.w_ih += np.random.normal(0, 0.3, self.w_ih.shape)
         if random.random() < mutation_rate:
@@ -55,9 +74,9 @@ class NeuralNetwork:
             self.w_ho += np.random.normal(0, 0.3, self.w_ho.shape)
         if random.random() < mutation_rate:
             self.b_o += np.random.normal(0, 0.3, self.b_o.shape)
-    
+
     def copy(self):
-        # Create an exact clone of this neural network
+        # Deep copy helper. Avoids reference issues during cloning.
         new_nn = NeuralNetwork(self.input_size, self.hidden_size, self.output_size)
         new_nn.w_ih = self.w_ih.copy()
         new_nn.b_h = self.b_h.copy()
@@ -67,8 +86,8 @@ class NeuralNetwork:
 
 class Bird:
     """
-    Bird class,
-    it uses the neural network to control its movement
+    Bird Agent.
+    Contains position, physics, and NN brain.
     """
     WIDTH = 34
     HEIGHT = 24
@@ -101,79 +120,92 @@ class Bird:
                 self.alive = False
                 return
     
+        # Pipe collision check
+        for pipe in pipes:
+            if self.check_collision(pipe):
+                self.alive = False
+                return
+
     def check_collision(self, pipe):
-        # Calculate bounding boxes to detect overlaps
+        """AABB Collision check (Rect vs Rect)"""
         bird_left = self.x
         bird_right = self.x + self.WIDTH
         bird_top = self.y
         bird_bottom = self.y + self.HEIGHT
-        
+    
         pipe_left = pipe['x']
         pipe_right = pipe['x'] + pipe['width']
         pipe_top = pipe['top']
         pipe_bottom = pipe['bottom']
-        
+    
+        # Horizontal overlap
         if bird_right > pipe_left and bird_left < pipe_right:
+            # Vertical overlap (Top or Bottom pipe)
             if bird_top < pipe_top or bird_bottom > pipe_bottom:
                 return True
-        
-        return False
     
+        return False
+
     def think(self, pipes):
-        # Find the closest pipe to make a decision
+        """
+        AI Decision block.
+        1. Find target pipe.
+        2. Normalize inputs.
+        3. Query NN.
+        4. Flap if output > 0.5.
+        """
         if not pipes:
             next_pipe = None
         else:
+            # Closest pipe ahead
             next_pipe = min(pipes, key=lambda p: abs(p['x'] - self.x))
-        
-        # Determine inputs for the neural network
+    
+        # Input Normalization (0-1 range approx)
         if next_pipe:
             pipe_dist = next_pipe['x'] - self.x
             gap_center = (next_pipe['top'] + next_pipe['bottom']) / 2.0
         else:
             pipe_dist = SCREEN_WIDTH
             gap_center = SCREEN_HEIGHT / 2.0
-        
+    
         inputs = [
-            self.y / SCREEN_HEIGHT,
-            (gap_center - self.y) / SCREEN_HEIGHT,
-            pipe_dist / SCREEN_WIDTH
+            self.y / SCREEN_HEIGHT,                  # Normalized Y pos
+            (gap_center - self.y) / SCREEN_HEIGHT,   # Vertical dist to gap
+            pipe_dist / SCREEN_WIDTH                 # Horizontal dist to pipe
         ]
-        
-        # Feed inputs to NN and jump if output > 0.5
+    
+        # NN Forward pass
         output = self.nn.forward(inputs)
-        
+    
+        # Threshold check
         if output > 0.5:
             self.velocity = -self.FLAP_STRENGTH
-    
+
     def draw(self, screen):
-        # Render the bird on screen
         pygame.draw.circle(screen, (255, 255, 0), (int(self.x), int(self.y)), self.WIDTH // 2)
 
 class Pipe:
-    """
-    Handles creating pipes with random gaps and checking if they're off-screen.
-    """
+    """Static methods for Pipe logic."""
     WIDTH = 60
     MIN_HEIGHT = 100
     GAP_SIZE = 120
-    
+
     @staticmethod
     def create(x):
-        # Generate a new pipe with random gap height
+        # Random gap position
         gap_y = random.randint(Pipe.MIN_HEIGHT, SCREEN_HEIGHT - Pipe.MIN_HEIGHT - Pipe.GAP_SIZE)
         return {
             'x': x,
             'width': Pipe.WIDTH,
             'top': gap_y,
             'bottom': gap_y + Pipe.GAP_SIZE,
-            'passed': False,
-            'frame_created': None  # Track when pipe created, for scoring
+            'passed': False,        # Score tracking flag
+            'frame_created': None
         }
-    
+
     @staticmethod
     def update(pipe):
-        # Move pipe to the left
+        # Move left
         pipe['x'] -= 5
     
     @staticmethod
@@ -205,78 +237,74 @@ class Pipe:
 
 class Game:
     """
-    Main game class. Handles the game loop, drawing, and the speed multiplier
-    that lets us train the AI much faster
+    Main Game Loop & Simulation.
+    Handles Speed Multiplier for fast training.
     """
     def __init__(self, speed_multiplier=1):
-        # Setup Pygame window, fonts, and timing
         self.screen = pygame.display.set_mode((SCREEN_WIDTH, SCREEN_HEIGHT))
         pygame.display.set_caption(f"Flappy Bird - Neural Network Evolution (Speed: {speed_multiplier}x)")
         self.clock = pygame.time.Clock()
         self.font_small = pygame.font.Font(None, 24)
         self.font_large = pygame.font.Font(None, 36)
         self.speed_multiplier = speed_multiplier
-        self.base_fps = FPS * speed_multiplier
-    
+        self.base_fps = FPS * speed_multiplier 
+
     def run_generation(self, birds, generation_num, best_overall_score):
-        """Runs a single generation of birds until they all crash/collide with pipes"""
-        # Initialize variables for this run
+        """
+        Run single generation.
+        Loop until all birds dead.
+        """
         pipes = []
         spawn_counter = 0
         frame_count = 0
         best_gen_score = 0
-        
+    
         running = True
         while running:
-            # Limit frame rate for visualization
-            # Speed multiplier: skip frames in rendering loop
-            # Lower FPS cap = visual speedup
+            # Visual FPS control
             target_fps = self.base_fps if self.speed_multiplier > 1 else FPS
             self.clock.tick(target_fps)
         
-            # Handle window close event
             for event in pygame.event.get():
                 if event.type == pygame.QUIT:
                     return None, best_overall_score
         
-            # Game Logic Loop - runs multiple times per frame if speed > 1
-            # Logic update loop - runs multiple times per frame if speed_multiplier > 1
+            # Logic Loop: Run multiple times per frame for speedup
             for _ in range(max(1, self.speed_multiplier)):
                 spawn_counter += 1
-                # Spawn new pipe every 90 frames
+                # Pipe Spawning
                 if spawn_counter > 90:
                     new_pipe = Pipe.create(SCREEN_WIDTH)
                     new_pipe['frame_created'] = frame_count
                     pipes.append(new_pipe)
                     spawn_counter = 0
-                
-                # Remove off-screen pipes
+            
+                # Pipe Cleanup
                 pipes = [pipe for pipe in pipes if not Pipe.is_offscreen(pipe)]
-                
-                # Move pipes
+            
+                # Pipe Movement
                 for pipe in pipes:
                     Pipe.update(pipe)
-                
-                # Check collisions and update scores
+            
+                # Physics & Scoring
                 for bird in birds:
                     if bird.alive:
                         Pipe.check_and_score(bird, pipes)
-                
-                # Get list of currently alive birds
+            
+                # Check alive count
                 alive_birds = [bird for bird in birds if bird.alive]
-                
-                # If everyone is dead, end the generation
+            
                 if not alive_birds:
                     running = False
                     break
-                
-                # Let birds think and move
+            
+                # AI Update
                 for bird in alive_birds:
                     bird.think(pipes)
                     bird.update(pipes)
-                
+            
                 frame_count += 1
-                # Safety stop to prevent infinite loops if birds get too good
+                # Failsafe: Prevent infinite games
                 if frame_count > 5000:
                     running = False
                     break
@@ -284,76 +312,78 @@ class Game:
             if not running:
                 break
         
-            # Render everything (only done once per frame loop, regardless of speed multiplier)
-            # Render at normal speed
+            # Render Step (Once per frame)
             self.screen.fill((135, 206, 235))
         
             for pipe in pipes:
                 Pipe.draw(self.screen, pipe)
-            
+        
             alive_birds = [bird for bird in birds if bird.alive]
             for bird in alive_birds:
                 bird.draw(self.screen)
-            
+        
+            # UI/Stats
             max_score = max((bird.score for bird in birds), default=0)
             best_gen_score = max(best_gen_score, max_score)
             best_overall_score = max(best_overall_score, best_gen_score)
-            
+        
             text_gen = self.font_small.render(f"Gen: {generation_num}", True, (0, 0, 0))
             text_alive = self.font_small.render(f"Alive: {len(alive_birds)}/{len(birds)}", True, (0, 0, 0))
             text_best = self.font_small.render(f"Best: {best_overall_score}", True, (0, 0, 0))
             text_curr = self.font_small.render(f"Current: {max_score}", True, (0, 0, 0))
             text_speed = self.font_small.render(f"Speed: {self.speed_multiplier}x", True, (255, 100, 0))
-            
+        
             self.screen.blit(text_gen, (10, 10))
             self.screen.blit(text_alive, (10, 35))
             self.screen.blit(text_best, (10, 60))
             self.screen.blit(text_curr, (10, 85))
             self.screen.blit(text_speed, (10, 110))
-            
-            pygame.display.flip()
         
+            pygame.display.flip()
+    
         return alive_birds, best_overall_score
 
 class Population:
     """
-    Manages the population of birds
-    Handles the evolutionary algorithm parts: selection, mutation, and reproduction
+    Genetic Algorithm Manager.
+    Handles population lifecycle: Create -> Evaluate -> Evolve.
     """
     def __init__(self, size=50, speed_multiplier=1):
-        # Initialize population of birds and game instance
         self.size = size
         self.birds = [Bird(50, SCREEN_HEIGHT // 2) for _ in range(size)]
         self.generation = 0
         self.best_score = 0
         self.game = Game(speed_multiplier=speed_multiplier)
-    
+
     def evaluate(self):
-        """Runs the game for the current generation to see how well they do"""
+        """Run simulation for current gen."""
         survivors, best_score = self.game.run_generation(self.birds, self.generation, self.best_score)
         self.best_score = best_score
-        
+    
         if survivors is None:
             return False
-        
-        return True
     
+        return True
+
     def evolve(self):
         """
-        Create next generation through selection and mutation (keep best birds and mutate them)
+        Evolution Step.
+        1. Select best.
+        2. Clone Elites.
+        3. Mutate remainder.
         """
-        # Sort birds by score to find the best ones
+        # Sort by fitness
         self.birds.sort(key=lambda b: b.score, reverse=True)
     
-        # Keep top performers (Elitism)
+        # Elitism: Top 25%
         elite = self.birds[:max(2, self.size // 4)]
     
         new_generation = []
-        # Add elites directly to new generation
+        # Clone elites
         for bird in elite:
             new_generation.append(Bird(50, SCREEN_HEIGHT // 2, bird.nn.copy()))
     
-        # Fill the rest of population by mutating copies of elites
+        # Fill rest via mutation
         while len(new_generation) < self.size:
             parent = random.choice(elite)
             child_nn = parent.nn.copy()
@@ -364,10 +394,11 @@ class Population:
         self.generation += 1
 
 def main():
-    # Parse command line arguments
+    # Config defaults
     speed_multiplier = 1
     max_gens = 5000
     
+    # CLI Args parsing
     for arg in sys.argv[1:]:
         if arg.startswith('--speed='):
             speed_multiplier = int(arg.split('=')[1])
@@ -384,53 +415,44 @@ Usage:
 
 Options:
     --speed=N, -sN    Speed multiplier (1-10)
-                      1 = normal speed
-                      5 = 5x faster visuals
-                      10 = 10x faster (max)
-    --fast            50 generations instead of 100
+    --fast            Run only 50 generations
     --help            Show this help
-
-Examples:
-    python flappy_bird_ai.py              # Normal speed (decent results but slowest!)
-    python flappy_bird_ai.py --speed=5    # 5x faster visuals (best results and fast!)
-    python flappy_bird_ai.py -s10         # 10x faster (MAX!) (not reliable!)
-    python flappy_bird_ai.py -s5 --fast   # 5x speed + 50 gens (decently reliable!)
             """)
             return
-    
+
     print(f"Starting Flappy Bird AI Evolution")
     print(f"Speed Multiplier: {speed_multiplier}x")
     print(f"Max Generations: {max_gens}")
     print("=" * 60)
 
-    # Create initial population
+    # Create init population
     population = Population(size=30, speed_multiplier=speed_multiplier)
 
-    # Main evolution loop
+    # Main Loop
     for gen_num in range(max_gens):
         print(f"Generation {population.generation}: Best Score = {population.best_score}")
     
-        # Run game for this generation
+        # 1. Play
         if not population.evaluate():
             print("Training interrupted by user")
             break
     
-        # Create next generation
+        # 2. Evolve
         population.evolve()
     
-        # Save best bird every 10 generations
+        # Checkpoint every 10 gens
         if population.generation % 10 == 0:
             best_bird = max(population.birds, key=lambda b: b.score)
             filename = f'best_bird_gen_{population.generation}.pkl'
             with open(filename, 'wb') as f:
                 pickle.dump(best_bird.nn, f)
             print(f"  Saved checkpoint: {filename}")
-    
+
     print(f"\n{'='*60}")
     print(f"Training Complete! Best Score: {population.best_score}")
     print(f"{'='*60}")
 
-    # Save final best bird
+    # Save final
     best_bird = max(population.birds, key=lambda b: b.score)
     with open('best_bird_final.pkl', 'wb') as f:
         pickle.dump(best_bird.nn, f)
